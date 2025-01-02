@@ -12,6 +12,14 @@ from homeassistant.components.group.light import FORWARDED_ATTRIBUTES, LightGrou
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
     ATTR_TRANSITION,
+    ATTR_COLOR_MODE,
+    ATTR_RGB_COLOR,
+    ATTR_RGBW_COLOR,
+    ATTR_RGBWW_COLOR,
+    ATTR_XY_COLOR,
+    ATTR_HS_COLOR,
+    ATTR_COLOR_TEMP_KELVIN,
+    ATTR_COLOR_NAME,
     ColorMode,
 )
 from homeassistant.components.light import DOMAIN as LIGHT_DOMAIN
@@ -192,6 +200,22 @@ class LightenerLight(LightGroup):
             key: value for key, value in kwargs.items() if key in FORWARDED_ATTRIBUTES
         }
 
+        #Detect what expected color mode is requested based on event props, fall back to self if mapping fails (will be off by n-1 states)
+        event_mode_map = {
+            ATTR_RGB_COLOR:ColorMode.RGB,
+            ATTR_RGBW_COLOR:ColorMode.RGBW,
+            ATTR_RGBWW_COLOR:ColorMode.RGBWW,
+            ATTR_XY_COLOR:ColorMode.XY,
+            ATTR_HS_COLOR:ColorMode.HS,
+            ATTR_COLOR_NAME:ColorMode.RGB,
+            ATTR_COLOR_TEMP_KELVIN:ColorMode.COLOR_TEMP
+        }
+
+        modeattr = next((event_mode_map[k] for k in kwargs if k in event_mode_map),None)
+
+        if modeattr is None:
+            modeattr = self.color_mode
+
         # Retrieve the brightness being set to the Lightener
         brightness = kwargs.get(ATTR_BRIGHTNESS)
 
@@ -218,6 +242,7 @@ class LightenerLight(LightGroup):
         for entity in self._entities:
             service = SERVICE_TURN_ON
             entity_brightness = None
+            modes = self.hass.states.get(entity.entity_id).attributes.get("supported_color_modes")
 
             # If the brightness is being set in the lightener, translate it to the entity level.
             if brightness is not None:
@@ -231,6 +256,17 @@ class LightenerLight(LightGroup):
                 # "Transition" is the only additional data allowed with the turn_off service.
                 if ATTR_TRANSITION in data:
                     entity_data[ATTR_TRANSITION] = data[ATTR_TRANSITION]
+
+            #if we're driving colors and an underlying light does not support color, then turn the light off.
+            elif (
+                modeattr in [ColorMode.HS, ColorMode.RGB, ColorMode.RGBW, ColorMode.RGBWW, ColorMode.XY]
+                and (modes == [ColorMode.COLOR_TEMP] or modes == [ColorMode.BRIGHTNESS])
+                ):
+                if (self.hass.states.get(entity.entity_id).state == STATE_ON):
+                    service = SERVICE_TURN_OFF
+                    entity_data = {}
+                else:
+                    continue
             else:
                 # Make a copy of the data being sent to the lightener call so we can modify it.
                 entity_data = data.copy()
